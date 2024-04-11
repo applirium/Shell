@@ -8,16 +8,22 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define MAX_LISTENERS 5
+#define MAX_LISTENERS 2
 #define SERVER 0
 #define CLIENT 1
 #define LOCAL 2
 #define BUFFER_SIZE 32768
+#define NAME_SIZE 20
 
 char pathname[50];
 int mode = LOCAL;
 int port = 12345;
-int keep_running = 1;
+
+typedef struct {
+    int socket;
+    struct sockaddr_in client_addr;
+    int* clients;
+} Connection;
 
 int builtin_halt(char **args);
 int builtin_help(char **args);
@@ -65,46 +71,121 @@ int builtin_halt(char **args) {
 
 int builtin_help(char **args) {
     help();
-    return 1;
+    return 0;
 }
 
 char* execute(char* input)
 {
     //TODO execution
-    return "doing bullshit\n";
+    return input;
 }
 
+// Function to get actual time and return it as a string
+char *getTime() {
+    static char time_str[9]; // HH:MM\0
+    int hours, minutes;
+    time_t now;
+    time(&now);
+    struct tm *local = localtime(&now);
+    hours = local->tm_hour;
+    minutes = local->tm_min;
+    snprintf(time_str, sizeof(time_str), "%02d:%02d", hours, minutes);
+    return time_str;
+}
+
+// Function to get hostname and return it as a string
+char *getHostname() {
+    static char hostname[NAME_SIZE]; // Assuming maximum hostname length is 255 characters
+    // Get the hostname
+    if (gethostname(hostname, sizeof(hostname)) != 0) {
+        perror("gethostname failed");
+        return NULL;
+    }
+    return hostname;
+}
+
+// Function is adding a new sockets to array of all active sockets when connected
+int connection(int** client_connections, int socket)
+{
+    for(int i = 0; i < MAX_LISTENERS; i++)
+    {
+        if((*client_connections)[i] == 0)
+        {
+            (*client_connections)[i] = socket;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+// Function is deleting a sockets where are disconnecting from array of all active sockets
+int disconnection(int** client_connections, int socket)
+{
+    for(int i = 0; i < MAX_LISTENERS; i++)
+    {
+        if((*client_connections)[i] == socket)
+        {
+            (*client_connections)[i] = 0;
+            return 0;
+        }
+    }
+    return -1;
+}
+
+//Function to handle client
 void client() {
     printf("You are client\n");
 
-    int sock;
+    int sock, connection_status;                                     // Definitions of variables
     struct sockaddr_in connection_client;
-    char output[BUFFER_SIZE], input[BUFFER_SIZE];
+    char output[BUFFER_SIZE], input[BUFFER_SIZE], name[NAME_SIZE];
 
-    // Create client socket
-    sock = socket(AF_INET, SOCK_STREAM, 0);
+    //Handeling client's connection
+    sock = socket(AF_INET, SOCK_STREAM, 0);     // Create client socket
     if (sock < 0)
     {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    // Set server address structure
-    connection_client.sin_family = AF_INET;
+    connection_client.sin_family = AF_INET;                         // Set server address structure
     connection_client.sin_port = htons(port);
     connection_client.sin_addr.s_addr = INADDR_ANY;
 
-    // Connect to the server
-    if (connect(sock, (struct sockaddr *) &connection_client, sizeof(connection_client)) < 0)
+    if (connect(sock, (struct sockaddr *) &connection_client, sizeof(connection_client)) < 0)       // Connect to the server
     {
         perror("Socket connection failed");
         exit(EXIT_FAILURE);
     }
 
+    // Client name definition
+    printf("Enter your client name: ");
+    fgets(name, sizeof(name), stdin);        // Read input from the user using fgets
+
+    size_t name_length = strlen(name);                 // Properly ending a string with \0
+    if (name_length > 0 && name[name_length - 1] == '\n')
+    {
+        name[name_length - 1] = '\0';
+    }
+
+    write(sock, name, strlen(name));        // Sending server a name of new client
+    read(sock, output, sizeof(output));    // Reading server anwere of allocation to server listeners
+    sscanf(output, "%d", &connection_status);
+
+    if(connection_status < 0)       // If > 0 succeffull, If < 0 full server, recejcted
+    {
+        printf("Can't connect client, exceeding max number of listeners\n");
+        close(sock);
+        pthread_exit(NULL);     // Shut down of client
+    }
+
     // Handle client communication
-    while(1) {
-        memset(input, 0, sizeof(input));
+    while(1)
+    {
+        memset(input, 0, sizeof(input));            // Reset of buffers
         memset(output, 0, sizeof(output));
+
+        printf("%s %s@%s# ",getTime(), name, getHostname());
 
         fgets(input, BUFFER_SIZE, stdin);        // Read input from stdin
         write(sock, input, strlen(input));      // Send input to the server
@@ -115,143 +196,162 @@ void client() {
         }
         else
         {
-            close(sock);
-            return;
+            close(sock);                                  // Close client's socket
+            break;
         }
     }
 }
 
-void *handle_server_input(void *arg) {
-    int server_sock = *((int *)arg);
+//Function is defined as server's thread whitch enable server stdin input
+void *handle_server_input(void *arg)
+{
+    Connection *args = (Connection *)arg;            // Definitions of variables
     char output[BUFFER_SIZE], input[BUFFER_SIZE];
 
     while (1) {
-        // Read input from stdin
-        memset(input, 0, sizeof(input));
+        memset(input, 0, sizeof(input));            // Reset of buffers
         memset(output, 0, sizeof(output));
 
-        fgets(input, BUFFER_SIZE, stdin);
-
-        if (strcmp(input, "quit\n") == 0) {
-            // Close the server socket
-            close(server_sock);                 //TODO quit from server
-
-            // Set the flag to stop the server loop
-            keep_running = 0;
-            break;
-        }
-        else
+        printf("%s %s@%s# ",getTime(), getHostname(), getHostname());
+        fgets(input, BUFFER_SIZE, stdin);       // Read input from stdin
+        if (strcmp(input, "quit\n") == 0)                    //if input == quit breaks
         {
-            strcpy(output, execute(input));
+
+            //TODO quit from server
+            pthread_exit(NULL);
+        }
+        else                                             //else execute command
+        {
+            strcpy(output, execute(input));     //copy bash output to output buffer
             printf("Server: %s",output);
         }
     }
-
-    return NULL;
 }
 
-void *handle_client(void *arg) {
-    int client_sock = *((int *)arg);
-    char input[BUFFER_SIZE], output[BUFFER_SIZE];
-    ssize_t bytes_received;
+//Function is defined as server's thread whitch are handeling each one connection to server
+void *handle_client(void *arg)
+{
+    Connection *args = (Connection *)arg;                // Definitions of variables
+    struct sockaddr_in client_addr = args->client_addr;
+    int client_sock = args->socket, connection_status;
+    char input[BUFFER_SIZE], output[BUFFER_SIZE], name[NAME_SIZE];
 
-    while ((bytes_received = recv(client_sock, input, BUFFER_SIZE, 0)) > 0)
+    // New connection approval process
+    read(client_sock, name, sizeof(name));        // Reading name of new connection
+    connection_status = connection(&args->clients, client_sock);    // Checking if server isn't full
+
+    sprintf(output, "%d",connection_status);
+    write(client_sock, output, sizeof(output));         // Returning answer to client
+
+    if(connection_status < 0)                                      // If > 0 succeffull, If < 0 full server, recejcted
     {
-        input[bytes_received] = '\0'; // Null-terminate the received data
+        close(client_sock);
+        pthread_exit(NULL);             // Shut down of server's thread to handle new client
+    }
 
-        // Check if the client wants to quit
-        if (strcmp(input, "quit\n") == 0) {
-            printf("Client disconnected.\n");
+    printf("Client %s connected: %s:%d\n",name, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+
+    while (1)
+    {
+        memset(input, 0, sizeof(input));
+        memset(output, 0, sizeof(output));
+
+        read(client_sock, input, sizeof(input));    // Receive output from the client
+        if (strcmp(input, "quit\n") == 0)                          // Check if the client wants to quit
+        {
+            printf("Client %s disconnected %s:%d\n",name, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
+            disconnection(&args->clients, client_sock);
             break;
         }
         else
         {
-            strcpy(output, execute(input));
-            write(client_sock, output, strlen(output));      // Send input to the server     // Echo the message back to the client
+            strcpy(output, execute(input));                      // Execute input and copy it to output
+            write(client_sock, output, strlen(output));      // Send input to the server
         }
-
-        memset(input, 0, sizeof(input));
-        memset(output, 0, sizeof(output));
     }
 
-    // Close the client socket
-    close(client_sock);
-    return NULL;
+    close(client_sock);          // Close the client socket
+    pthread_exit(NULL);
 }
 
+//Function to handle server
 void server() {
     printf("You are server\n");
 
-    int server_sock, client_sock;
+    int server_sock, client_sock, opt = 1;                               // Definitions of variables
     struct sockaddr_in server_addr, client_addr;
     pthread_t client_thread_id, input_thread_id;
     socklen_t client_addr_len;
-    int opt = 1;
 
-    // Create server socket
-    server_sock = socket(AF_INET, SOCK_STREAM, 0);
-    if (server_sock < 0) {
+    int server_connection[MAX_LISTENERS];
+    for(int i = 0; i < MAX_LISTENERS; i++)
+    {
+        server_connection[i] = 0;
+    }
+
+    //Handeling client's connection
+    server_sock = socket(AF_INET, SOCK_STREAM, 0);      // Create server socket
+    if (server_sock < 0)
+    {
         perror("Socket creation failed");
         exit(EXIT_FAILURE);
     }
 
-    // Set server socket options
-    if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0) {
+    if (setsockopt(server_sock, SOL_SOCKET, SO_REUSEADDR, &opt, sizeof(opt)) < 0)       // Set server socket options
+    {
         perror("Setsockopt failed");
         exit(EXIT_FAILURE);
     }
 
-    // Initialize server address structure
-    memset(&server_addr, 0, sizeof(server_addr));
+    memset(&server_addr, 0, sizeof(server_addr));               // Initialize server address structure
     server_addr.sin_family = AF_INET;
     server_addr.sin_addr.s_addr = INADDR_ANY;
     server_addr.sin_port = htons(port);
 
-    // Bind server socket
-    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0) {
+    if (bind(server_sock, (struct sockaddr *)&server_addr, sizeof(server_addr)) < 0)            // Bind server socket
+    {
         perror("Bind failed");
         exit(EXIT_FAILURE);
     }
 
-    // Listen for incoming connections
-    if (listen(server_sock, MAX_LISTENERS) < 0) {
+    if (listen(server_sock, MAX_LISTENERS) < 0)             // Listen for incoming connections
+    {
         perror("Listen failed");
         exit(EXIT_FAILURE);
     }
 
     printf("Server listening on port %d...\n", port);
 
-    //Create thread to handle server input
-    if (pthread_create(&input_thread_id, NULL, handle_server_input, &server_sock) != 0) {
+    if (pthread_create(&input_thread_id, NULL, handle_server_input, &server_sock) != 0)     //Create thread to handle input on server
+    {
         perror("Server input thread creation failed");
         exit(EXIT_FAILURE);
     }
 
     // Main server loop
-    while (keep_running) {
-        // Accept incoming connection
+    while (1)
+    {
         client_addr_len = sizeof(client_addr);
-        client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len);
-        if (client_sock < 0) {
+        client_sock = accept(server_sock, (struct sockaddr *)&client_addr, &client_addr_len);       // Accept incoming connection
+
+        if(client_sock < 0)
+        {
             perror("Accept failed");
             continue;
         }
 
-        printf("Client connected: %s:%d\n", inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
-
-        // Create thread to handle client communication
-        if (pthread_create(&client_thread_id, NULL, handle_client, &client_sock) != 0) {
+        Connection arguments = {client_sock, client_addr, server_connection};                            // Pushing information to threads
+        if (pthread_create(&client_thread_id, NULL, handle_client, &arguments) != 0)      // Create thread to handle client communication
+        {
             perror("Thread creation failed");
             close(client_sock);
             continue;
         }
 
-        // Detach the thread to allow it to run independently
-        pthread_detach(client_thread_id);
+        pthread_detach(client_thread_id);           // Detach the thread to allow it to run independently
     }
 
-    // Close the server socket
-    close(server_sock);
+    close(server_sock);         // Close the server socket
 }
 
 int main(int argc, char **argv) {
