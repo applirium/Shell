@@ -8,15 +8,14 @@
 #include <sys/socket.h>
 #include <netinet/in.h>
 
-#define MAX_LISTENERS 2
+#define MAX_LISTENERS 5
 #define SERVER 0
 #define CLIENT 1
-#define LOCAL 2
 #define BUFFER_SIZE 32768
 #define NAME_SIZE 20
 
 char pathname[50];
-int mode = LOCAL;
+int mode = -1;
 int port = 12345;
 
 typedef struct {
@@ -189,16 +188,22 @@ void client() {
 
         fgets(input, BUFFER_SIZE, stdin);        // Read input from stdin
         write(sock, input, strlen(input));      // Send input to the server
-        if (strcmp(input, "quit\n") != 0)                     // Check if input contains "quit"
+        read(sock, output, sizeof(output));  // Receive output from the server
+
+        if (strcmp(output, "quit\n") == 0)          // If server will quit
         {
-            read(sock, output, sizeof(output));    // Receive output from the server
-            printf("Client: %s", output);                  // Print the received output
-        }
-        else
-        {
-            close(sock);                                  // Close client's socket
+            printf("Autodisconnection - Server disconnected\n");
+            close(sock);
             break;
         }
+
+        if (strcmp(input, "quit\n") == 0)           // If client will quit
+        {
+            close(sock);
+            break;
+        }
+
+        printf("Client: %s", output);        // Print the received output
     }
 }
 
@@ -208,7 +213,8 @@ void *handle_server_input(void *arg)
     Connection *args = (Connection *)arg;            // Definitions of variables
     char output[BUFFER_SIZE], input[BUFFER_SIZE];
 
-    while (1) {
+    while (1)
+    {
         memset(input, 0, sizeof(input));            // Reset of buffers
         memset(output, 0, sizeof(output));
 
@@ -216,9 +222,14 @@ void *handle_server_input(void *arg)
         fgets(input, BUFFER_SIZE, stdin);       // Read input from stdin
         if (strcmp(input, "quit\n") == 0)                    //if input == quit breaks
         {
+            int* clients = args->clients;
+            for(int i = 0; i < MAX_LISTENERS; i++)
+            {
+                if (clients[i] != 0)
+                    write(clients[i], input, strlen(input));
+            }
 
-            //TODO quit from server
-            pthread_exit(NULL);
+            exit(EXIT_SUCCESS);
         }
         else                                             //else execute command
         {
@@ -322,7 +333,8 @@ void server() {
 
     printf("Server listening on port %d...\n", port);
 
-    if (pthread_create(&input_thread_id, NULL, handle_server_input, &server_sock) != 0)     //Create thread to handle input on server
+    Connection arguments_server = {server_sock, server_addr, server_connection};
+    if (pthread_create(&input_thread_id, NULL, handle_server_input, &arguments_server) != 0)     //Create thread to handle input on server
     {
         perror("Server input thread creation failed");
         exit(EXIT_FAILURE);
@@ -350,8 +362,6 @@ void server() {
 
         pthread_detach(client_thread_id);           // Detach the thread to allow it to run independently
     }
-
-    close(server_sock);         // Close the server socket
 }
 
 int main(int argc, char **argv) {
