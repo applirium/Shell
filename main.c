@@ -3,6 +3,7 @@
 #include <stdlib.h>
 #include <unistd.h>
 #include <pthread.h>
+#include <fcntl.h>
 
 #include <arpa/inet.h>
 #include <sys/socket.h>
@@ -11,7 +12,7 @@
 #define MAX_LISTENERS 5
 #define SERVER 0
 #define CLIENT 1
-#define BUFFER_SIZE 32768
+#define BUFFER_SIZE 65536
 #define NAME_SIZE 20
 
 char pathname[50];
@@ -20,17 +21,51 @@ int port = 12345;
 
 typedef struct {
     int socket;
+    int std_in;
+    int std_out;
     struct sockaddr_in client_addr;
     int* clients;
 } Connection;
 
-int builtin_halt(char **args);
+typedef struct Node {
+    char* expression;
+    struct Node* next;
+} Node;
+
+// Function to create a new node
+struct Node* createNode(char* data) {
+    struct Node* newNode = (struct Node*)malloc(sizeof(struct Node));
+
+    newNode->expression = malloc(strlen(data) + 1);
+    strcpy(newNode->expression, data);
+    newNode->next = NULL;
+    return newNode;
+}
+
+// Function to insert a node at the beginning of the linked list
+void insertAtBeginning(struct Node** headRef, char* data) {
+    struct Node* newNode = createNode(data);
+    newNode->next = *headRef;
+    *headRef = newNode;
+}
+
+// Function to delete the entire linked list
+void deleteList(struct Node** headRef) {
+    struct Node* current = *headRef;
+    struct Node* next;
+
+    while (current != NULL) {
+        next = current->next;
+        free(current);
+        current = next;
+    }
+    *headRef = NULL; // Update head to NULL after deleting all nodes
+}
+
 int builtin_help(char **args);
 
 char *builtin_str[] = {
-        "halt",
-        "help",
-        "quit"
+        "help"
 };
 
 void help()
@@ -59,24 +94,61 @@ void help()
 }
 
 int (*builtin_func[]) (char **) = {
-        &builtin_halt,
         &builtin_help,
 };
-
-
-int builtin_halt(char **args) {
-    exit(1);
-}
 
 int builtin_help(char **args) {
     help();
     return 0;
 }
 
-char* execute(char* input)
+Node* input_parsing(char* input)
 {
-    //TODO execution
-    return input;
+
+}
+
+void execute(char* input, int std_in, int std_out, int i, const int* socket)
+{
+    int server_stdout;
+    char output[BUFFER_SIZE];
+    ssize_t bytes_read;
+
+    if (strcmp(input, "halt\n") == 0)
+        strcpy(input, "halt");
+
+    // setting output to temporary file
+    server_stdout = open("server_output.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0666);
+    if (server_stdout < 0)
+    {
+        perror("Could not open file server_output.tmp");
+        return;
+    }
+
+    Node* parsed_linked_input = input_parsing(input);
+    write(server_stdout, input, sizeof(input));
+    //for(int i = 0; i < MAX_TOKENS; i++)
+    //{
+    //
+    //}
+
+    // close open files and send response with output to client
+    close(server_stdout);
+    dup2(std_in, STDIN_FILENO);
+    dup2(std_out, STDOUT_FILENO);
+
+
+    server_stdout = open("server_output.tmp", O_RDONLY, 0666);
+    bytes_read = read(server_stdout, output, sizeof(output) - 1);
+    output[bytes_read] = '\0';
+
+    if (i == SERVER)
+        printf("%s", output);
+
+    else
+        write(*socket, output, bytes_read);
+
+    close(server_stdout);
+    remove("server_output.tmp");
 }
 
 // Function to get actual time and return it as a string
@@ -190,7 +262,7 @@ void client() {
         write(sock, input, strlen(input));      // Send input to the server
         read(sock, output, sizeof(output));  // Receive output from the server
 
-        if (strcmp(output, "quit\n") == 0)          // If server will quit
+        if (strcmp(output, "halt\n") == 0)          // If server will quit
         {
             printf("Autodisconnection - Server disconnected\n");
             close(sock);
@@ -203,7 +275,7 @@ void client() {
             break;
         }
 
-        printf("Client: %s", output);        // Print the received output
+        printf("%s", output);        // Print the received output
     }
 }
 
@@ -220,7 +292,7 @@ void *handle_server_input(void *arg)
 
         printf("%s %s@%s# ",getTime(), getHostname(), getHostname());
         fgets(input, BUFFER_SIZE, stdin);       // Read input from stdin
-        if (strcmp(input, "quit\n") == 0)                    //if input == quit breaks
+        if (strcmp(input, "halt\n") == 0)                    //if input == halt breaks
         {
             int* clients = args->clients;
             for(int i = 0; i < MAX_LISTENERS; i++)
@@ -228,13 +300,11 @@ void *handle_server_input(void *arg)
                 if (clients[i] != 0)
                     write(clients[i], input, strlen(input));
             }
-
             exit(EXIT_SUCCESS);
         }
         else                                             //else execute command
         {
-            strcpy(output, execute(input));     //copy bash output to output buffer
-            printf("Server: %s",output);
+            execute(input, args->std_in, args->std_out, SERVER, NULL);     //copy bash output to output buffer
         }
     }
 }
@@ -276,8 +346,7 @@ void *handle_client(void *arg)
         }
         else
         {
-            strcpy(output, execute(input));                      // Execute input and copy it to output
-            write(client_sock, output, strlen(output));      // Send input to the server
+            execute(input, args->std_in, args->std_out,  CLIENT, &(args->socket));                     // Execute input and copy it to output
         }
     }
 
@@ -289,10 +358,13 @@ void *handle_client(void *arg)
 void server() {
     printf("You are server\n");
 
-    int server_sock, client_sock, opt = 1;                               // Definitions of variables
+    int std_in, std_out, server_sock, client_sock, opt = 1;                               // Definitions of variables
     struct sockaddr_in server_addr, client_addr;
     pthread_t client_thread_id, input_thread_id;
     socklen_t client_addr_len;
+
+    std_in = dup(0);
+    std_out = dup(1);
 
     int server_connection[MAX_LISTENERS];
     for(int i = 0; i < MAX_LISTENERS; i++)
@@ -333,7 +405,7 @@ void server() {
 
     printf("Server listening on port %d...\n", port);
 
-    Connection arguments_server = {server_sock, server_addr, server_connection};
+    Connection arguments_server = {server_sock, std_in, std_out, server_addr, server_connection};
     if (pthread_create(&input_thread_id, NULL, handle_server_input, &arguments_server) != 0)     //Create thread to handle input on server
     {
         perror("Server input thread creation failed");
@@ -352,7 +424,7 @@ void server() {
             continue;
         }
 
-        Connection arguments = {client_sock, client_addr, server_connection};                            // Pushing information to threads
+        Connection arguments = {client_sock, std_in, std_out, client_addr, server_connection};                            // Pushing information to threads
         if (pthread_create(&client_thread_id, NULL, handle_client, &arguments) != 0)      // Create thread to handle client communication
         {
             perror("Thread creation failed");
