@@ -28,39 +28,9 @@ typedef struct {
 } Connection;
 
 typedef struct Node {
-    char* expression;
+    char** command;
     struct Node* next;
 } Node;
-
-// Function to create a new node
-struct Node* createNode(char* data) {
-    struct Node* newNode = (struct Node*)malloc(sizeof(struct Node));
-
-    newNode->expression = malloc(strlen(data) + 1);
-    strcpy(newNode->expression, data);
-    newNode->next = NULL;
-    return newNode;
-}
-
-// Function to insert a node at the beginning of the linked list
-void insertAtBeginning(struct Node** headRef, char* data) {
-    struct Node* newNode = createNode(data);
-    newNode->next = *headRef;
-    *headRef = newNode;
-}
-
-// Function to delete the entire linked list
-void deleteList(struct Node** headRef) {
-    struct Node* current = *headRef;
-    struct Node* next;
-
-    while (current != NULL) {
-        next = current->next;
-        free(current);
-        current = next;
-    }
-    *headRef = NULL; // Update head to NULL after deleting all nodes
-}
 
 int builtin_help(char **args);
 
@@ -89,8 +59,7 @@ void help()
     }
 
     printf("\n"
-           "Use man for more information about bash commands\n"
-           "\n");
+           "Use man for more information about bash commands\n");
 }
 
 int (*builtin_func[]) (char **) = {
@@ -102,36 +71,169 @@ int builtin_help(char **args) {
     return 0;
 }
 
+// Function to create a new node
+struct Node* createNode(char** data)
+{
+    struct Node *newNode = (struct Node *) malloc(sizeof(struct Node));
+
+    newNode->command = (char **) malloc(sizeof(char *) * 10);
+    for (int i = 0; i < 10; i++)
+    {
+
+        if (data[i] != NULL)
+        {
+            // Allocate memory for the string and copy data[i] to it
+            newNode->command[i] = (char *) malloc(strlen(data[i]));
+            newNode->command[i] = strdup(data[i]);
+        } else
+        {
+            // If data[i] is NULL, set newNode->command[i] to NULL
+            newNode->command[i] = NULL;
+        }
+    }
+
+    newNode->next = NULL;
+    return newNode;
+}
+
+// Function to insert a node at the end of the linked list
+void insertAtEnd(struct Node** headRef, char** data) {
+    struct Node* newNode = createNode(data);
+    struct Node* last = *headRef;
+
+    if (*headRef == NULL) {
+        *headRef = newNode;
+        return;
+    }
+
+    while (last->next != NULL) {
+        last = last->next;
+    }
+
+    last->next = newNode;
+}
+
+// Function to delete the entire linked list
+void deleteList(struct Node** headRef) {
+    struct Node* current = *headRef;
+    struct Node* next;
+
+    while (current != NULL) {
+        next = current->next;
+        free(*current->command); // Free the memory allocated for the command string
+        free(current->command); // Free the memory allocated for the command array
+        free(current);
+        current = next;
+    }
+    *headRef = NULL; // Update head to NULL after deleting all nodes
+}
+
 Node* input_parsing(char* input)
 {
+    Node* linked_list = NULL;
+    char* command_pieces[10] = {NULL}; // Array to hold command pieces
+    int index = 0;
+    int piece_index = 0;
 
+    for (int i = 0; i <= strlen(input); i++)
+    {
+        if (input[i] == ' ')        // Check for space or end of string
+        {
+            if(index != 0)
+            {
+                command_pieces[piece_index][index] = '\0';
+                piece_index++; // Increment piece_index when we encounter space or end of string
+                index = 0; // Reset index for the next command piece
+            }
+        }
+
+        else if (input[i] == '#' || input[i] == '>' || input[i] == '<' || input[i] == ';' || input[i] == '\\' || input[i] == '|' || input[i] == '\0')
+        {
+            if (piece_index != 0 || index != 0)
+            {
+                command_pieces[piece_index][index] = '\0';
+
+                insertAtEnd(&linked_list, command_pieces); // Insert the command pieces into the linked list
+                piece_index = 0; // Reset piece_index
+
+                for (int j = 0; j < 10; j++)
+                {
+                    if (command_pieces[j] == NULL)
+                        break;
+
+                    command_pieces[j] = NULL;
+                }
+            }
+
+            if(input[i] != '\0')
+            {
+                char special_char[2] = { input[i], '\0' };
+                command_pieces[0] = strdup(special_char);
+                command_pieces[1] = NULL;
+                insertAtEnd(&linked_list, command_pieces);
+
+                command_pieces[0] = NULL;
+            }
+        }
+        else
+        {
+            if (command_pieces[piece_index] == NULL)
+                command_pieces[piece_index] = (char *) malloc((strlen(input) - i + 1));
+
+            command_pieces[piece_index][index++] = input[i];
+        }
+    }
+
+    return linked_list;
 }
 
 void execute(char* input, int std_in, int std_out, int i, const int* socket)
 {
-    int server_stdout;
+    int server_stdout, builtin;
     char output[BUFFER_SIZE];
     ssize_t bytes_read;
 
-    if (strcmp(input, "halt\n") == 0)
-        strcpy(input, "halt");
-
     // setting output to temporary file
     server_stdout = open("server_output.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    if (server_stdout < 0)
-    {
-        perror("Could not open file server_output.tmp");
-        return;
-    }
+    write(server_stdout, "bash: ", strlen("bash: "));
 
     Node* parsed_linked_input = input_parsing(input);
-    write(server_stdout, input, sizeof(input));
-    //for(int i = 0; i < MAX_TOKENS; i++)
-    //{
-    //
-    //}
+    Node* current = parsed_linked_input;
+
+    while (current != NULL) {
+        int index = 0;
+        while (current->command[index] != NULL)
+        {
+            for(int j = 0; j < sizeof(builtin_str) / sizeof(char *); j++)
+            {
+                builtin = 0;
+                if (strcmp(current->command[index], builtin_str[j]) == 0)
+                {
+                    int original_stdout = dup(server_stdout);
+
+                    dup2(server_stdout, 1);
+                    builtin_func[j](current->command);
+                    dup2(original_stdout, 1);
+                    builtin = 1;
+
+                    break;
+                }
+            }
+
+            if (builtin)
+                break;
+
+
+            write(server_stdout, current->command[index], strlen(current->command[index]));
+            index++;
+        }
+        current = current->next;
+    }
+
 
     // close open files and send response with output to client
+
+    deleteList(&parsed_linked_input);
     close(server_stdout);
     dup2(std_in, STDIN_FILENO);
     dup2(std_out, STDOUT_FILENO);
@@ -142,7 +244,7 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
     output[bytes_read] = '\0';
 
     if (i == SERVER)
-        printf("%s", output);
+        printf("%s\n", output);
 
     else
         write(*socket, output, bytes_read);
@@ -259,23 +361,25 @@ void client() {
         printf("%s %s@%s# ",getTime(), name, getHostname());
 
         fgets(input, BUFFER_SIZE, stdin);        // Read input from stdin
-        write(sock, input, strlen(input));      // Send input to the server
-        read(sock, output, sizeof(output));  // Receive output from the server
+        input[strlen(input) - 1] = '\0';
 
-        if (strcmp(output, "halt\n") == 0)          // If server will quit
+        write(sock, input, strlen(input));      // Send input to the server
+        read(sock, output, sizeof(output));    // Receive output from the server
+
+        if (strcmp(output, "halt") == 0)          // If server will quit
         {
             printf("Autodisconnection - Server disconnected\n");
             close(sock);
             break;
         }
 
-        if (strcmp(input, "quit\n") == 0)           // If client will quit
+        if (strcmp(input, "quit") == 0)           // If client will quit
         {
             close(sock);
             break;
         }
 
-        printf("%s", output);        // Print the received output
+        printf("%s\n", output);        // Print the received output
     }
 }
 
@@ -292,7 +396,9 @@ void *handle_server_input(void *arg)
 
         printf("%s %s@%s# ",getTime(), getHostname(), getHostname());
         fgets(input, BUFFER_SIZE, stdin);       // Read input from stdin
-        if (strcmp(input, "halt\n") == 0)                    //if input == halt breaks
+        input[strlen(input) - 1] = '\0';
+
+        if (strcmp(input, "halt") == 0)                    //if input == halt breaks
         {
             int* clients = args->clients;
             for(int i = 0; i < MAX_LISTENERS; i++)
@@ -322,7 +428,7 @@ void *handle_client(void *arg)
     connection_status = connection(&args->clients, client_sock);    // Checking if server isn't full
 
     sprintf(output, "%d",connection_status);
-    write(client_sock, output, sizeof(output));         // Returning answer to client
+    write(client_sock, output, strlen(output));         // Returning answer to client
 
     if(connection_status < 0)                                      // If > 0 succeffull, If < 0 full server, recejcted
     {
@@ -338,7 +444,7 @@ void *handle_client(void *arg)
         memset(output, 0, sizeof(output));
 
         read(client_sock, input, sizeof(input));    // Receive output from the client
-        if (strcmp(input, "quit\n") == 0)                          // Check if the client wants to quit
+        if (strcmp(input, "quit") == 0)                          // Check if the client wants to quit
         {
             printf("Client %s disconnected %s:%d\n",name, inet_ntoa(client_addr.sin_addr), ntohs(client_addr.sin_port));
             disconnection(&args->clients, client_sock);
