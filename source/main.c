@@ -11,6 +11,8 @@
 #include <netinet/in.h>
 #include <pwd.h>
 
+#include "../header/help.h"
+
 #define MAX_LISTENERS 5
 #define SERVER 0
 #define CLIENT 1
@@ -23,11 +25,11 @@
 // 9. Client                 + 3
 // 10. Special characters '' + 2
 // 11. IP -i                 + 2
+// 17. link to lib           + 2
 // 24. logs -l               + 2
-// 28. TODO Makefile
 // 30. English Documentation + 1
 // ---------------------------
-//                   6 + 16 = 22
+//                   6 + 16 = 24
 
 char pathname[50];
 int mode = -1;
@@ -40,7 +42,6 @@ int file_flag = 0;
 int builtin_help(void *args);
 int builtin_stat(void *args);
 int (*builtin_func[]) (void *) = {&builtin_help,&builtin_stat};
-char *builtin_str[] ={"help","stat"};
 
 typedef struct Connection {
     int mode;
@@ -55,29 +56,6 @@ typedef struct Node {
     char** command;
     struct Node* next;
 } Node;
-
-void help()
-{
-    printf("Author - Lukáš Štefančík\n"
-           "SPAASM Zadanie 2\n"
-           "-h for printing help\n"
-           "-s for switching into server\n"
-           "-c for switching into client\n"
-           "-p <port number> to set port\n"
-           "-i <ip> to set IP adress\n"
-           ";l <file> to set history file"
-           "\n"
-           "Connection modes\n"
-           "    0 - SERVER\n"
-           "    1 - CLIENT\n"
-           "    2 - LOCAL\n"
-           "\n"
-           "Shell uses these builtins:\n");
-
-    for (int i = 0; i < sizeof(builtin_str) / sizeof(char *); i++) {
-        printf("    %s\n", builtin_str[i]);
-    }
-}
 
 int builtin_help(void *)
 {
@@ -103,7 +81,6 @@ int builtin_stat(void *args) {
     }
     return 0;
 }
-
 
 // Function to create a new node
 struct Node* createNode(char** data)
@@ -274,7 +251,7 @@ void execute(char* input, int std_in, int std_out, int i, Connection* informatio
     {
         skip = 0;
 
-        for(int j = 0; j < sizeof(builtin_str) / sizeof(char *); j++)
+        for(int j = 0; j < sizeof(builtin_func) / sizeof(int *); j++)
         {
             builtin = 0;
             if (strcmp(current->command[0], builtin_str[j]) == 0)
@@ -784,3 +761,7 @@ int main(int argc, char **argv)
     }
     return EXIT_SUCCESS;
 }
+
+//gcc -c ../source/help.c
+//ar rcs help.ar help.o
+//gcc -o main.exe ../source/main.c -L/mnt/d/FIIT/"4. semester"/SPAASM/zadanie/2/Shell/exec help.ar
