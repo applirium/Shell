@@ -17,22 +17,33 @@
 #define BUFFER_SIZE 65536
 #define NAME_SIZE 20
 
-// Main Program ALMOST         6
-// 3. TODO stat
+// Main Program                6
+// 3. stat                   + 3
 // 7. Inline assembler       + 3
 // 9. Client                 + 3
 // 10. Special characters '' + 2
-// 11. TODO IP -i
-// 24. TODO logs -l
+// 11. IP -i                 + 2
+// 24. logs -l               + 2
 // 28. TODO Makefile
 // 30. English Documentation + 1
 // ---------------------------
-//                    6 + 9 = 15
+//                   6 + 16 = 22
+
 char pathname[50];
 int mode = -1;
 int port = 12345;
+char ip[16];
 
-typedef struct {
+char file[NAME_SIZE];
+int file_flag = 0;
+
+int builtin_help(void *args);
+int builtin_stat(void *args);
+int (*builtin_func[]) (void *) = {&builtin_help,&builtin_stat};
+char *builtin_str[] ={"help","stat"};
+
+typedef struct Connection {
+    int mode;
     int socket;
     int std_in;
     int std_out;
@@ -45,10 +56,6 @@ typedef struct Node {
     struct Node* next;
 } Node;
 
-int builtin_help(char **args);
-
-char *builtin_str[] ={"help"};
-
 void help()
 {
     printf("Author - Lukáš Štefančík\n"
@@ -57,6 +64,8 @@ void help()
            "-s for switching into server\n"
            "-c for switching into client\n"
            "-p <port number> to set port\n"
+           "-i <ip> to set IP adress\n"
+           ";l <file> to set history file"
            "\n"
            "Connection modes\n"
            "    0 - SERVER\n"
@@ -66,18 +75,35 @@ void help()
            "Shell uses these builtins:\n");
 
     for (int i = 0; i < sizeof(builtin_str) / sizeof(char *); i++) {
-        printf("    %3s\n", builtin_str[i]);
+        printf("    %s\n", builtin_str[i]);
     }
 }
 
-int (*builtin_func[]) (char **) = {
-        &builtin_help,
-};
-
-int builtin_help(char **args) {
+int builtin_help(void *)
+{
     help();
     return 0;
 }
+
+int builtin_stat(void *args) {
+    Connection *arg = (Connection *)args;
+
+    if(arg->mode == CLIENT)
+    {
+        printf("Používaný port je: %d Používaná ip adresa je %s\n", port,ip);
+    }
+    else
+    {
+        printf("Používaný port je: %d Používaná ip adresa je %s\n", port,ip);
+        for(int i = 0; i < MAX_LISTENERS; i++)
+        {
+            if (arg->clients[i] == 0) break;
+            printf("    Reserverd socket - client %d: %d\n", i+1, arg->clients[i]);
+        }
+    }
+    return 0;
+}
+
 
 // Function to create a new node
 struct Node* createNode(char** data)
@@ -109,23 +135,27 @@ void insertAtEnd(struct Node** headRef, char** data) {
     struct Node* newNode = createNode(data);
     struct Node* last = *headRef;
 
-    if (*headRef == NULL) {
+    if (*headRef == NULL)
+    {
         *headRef = newNode;
         return;
     }
 
-    while (last->next != NULL) {
+    while (last->next != NULL)
+    {
         last = last->next;
     }
     last->next = newNode;
 }
 
 // Function to delete the entire linked list
-void deleteList(struct Node** headRef) {
+void deleteList(struct Node** headRef)
+{
     struct Node* current = *headRef;
     struct Node* next;
 
-    while (current != NULL) {
+    while (current != NULL)
+    {
         next = current->next;
         free(*current->command); // Free the memory allocated for the command string
         free(current->command); // Free the memory allocated for the command array
@@ -172,7 +202,9 @@ Node* input_parsing(char* input)
                 for (int j = 0; j < 10; j++)
                 {
                     if (command_pieces[j] == NULL)
+                    {
                         break;
+                    }
 
                     command_pieces[j] = NULL;
                 }
@@ -191,8 +223,9 @@ Node* input_parsing(char* input)
         else
         {
             if (command_pieces[piece_index] == NULL)
+            {
                 command_pieces[piece_index] = (char *) malloc((strlen(input) - i + 1));
-
+            }
 
             if(input[i] == '\'')
             {
@@ -201,10 +234,14 @@ Node* input_parsing(char* input)
             }
 
             if(input[i] == '\"' && special != 1)
+            {
                 continue;
+            }
 
             if(input[i] == '\\' && special != 1)
+            {
                 i++;
+            }
 
             if(i == strlen(input))
             {
@@ -221,9 +258,9 @@ Node* input_parsing(char* input)
     return linked_list;
 }
 
-void execute(char* input, int std_in, int std_out, int i, const int* socket)
+void execute(char* input, int std_in, int std_out, int i, Connection* information)
 {
-    int server_stdout, builtin, skip;
+    int fd[2], server_stdout, builtin, skip;
     char output[BUFFER_SIZE];
     ssize_t bytes_read;
 
@@ -233,7 +270,8 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
     Node* parsed_linked_input = input_parsing(input);
     Node* current = parsed_linked_input;
 
-    while (current != NULL) {
+    while (current != NULL)
+    {
         skip = 0;
 
         for(int j = 0; j < sizeof(builtin_str) / sizeof(char *); j++)
@@ -242,26 +280,46 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
             if (strcmp(current->command[0], builtin_str[j]) == 0)
             {
                 dup2(server_stdout, STDOUT_FILENO);
-                builtin_func[j](current->command);
+                builtin_func[j](information);
                 builtin = 1;
                 break;
             }
         }
         if (builtin)
+        {
             break;
+        }
+
+        if (pipe(fd) < 0)
+        {
+            perror("Pipe error");
+        }
 
         if (strcmp(current->command[0], "#") == 0)
+        {
             break;
+        }
 
-        if (strcmp(current->command[0], ";") == 0 || strcmp(current->command[0], "<") == 0 || strcmp(current->command[0], ">") == 0)
+        if (strcmp(current->command[0], ";") == 0 || strcmp(current->command[0], "|") == 0)
+        {
             skip = 1;
+        }
 
         if(!skip)
         {
             if (fork() == 0)
             {
-                dup2(server_stdout, STDOUT_FILENO);
-                dup2(server_stdout, STDERR_FILENO);
+                if (current->next != NULL && strcmp(current->next->command[0], "|") == 0)
+                {
+                    close(fd[0]);
+                    dup2(fd[1], STDOUT_FILENO);
+                    dup2(fd[1], STDERR_FILENO);
+                }
+                else
+                {
+                    dup2(server_stdout, STDOUT_FILENO);
+                    dup2(server_stdout, STDERR_FILENO);
+                }
 
                 if (execvp(current->command[0], current->command) == -1)
                 {
@@ -270,6 +328,13 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
                 }
             }
             wait(NULL);                 // parent process, child will not get here!!!, wait for child to complete
+
+            close(fd[1]);
+            if (current->next != NULL && strcmp(current->next->command[0], "|") == 0)
+            {
+                dup2(fd[0], STDIN_FILENO);
+            }
+            close(fd[0]);
         }
         current = current->next;
     }
@@ -285,10 +350,14 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
     output[bytes_read] = '\0';
 
     if (i == SERVER)
+    {
         printf("%s", output);
+    }
 
     else
-        write(*socket, output, bytes_read);
+    {
+        write(information->socket, output, bytes_read);
+    }
 
     close(server_stdout);
     remove("server_output.tmp");
@@ -310,11 +379,12 @@ char* getServername()
     int id;
     static char meno[100] = "";
 
-    asm volatile (
+    asm volatile
+    (
             "mov $102, %%rax\n"  // Set rax register to 102 (syscall number for getuid)
             "syscall\n"          // Trigger the syscall
             : "=a" (id)          // Output: id
-            );
+    );
 
     pws = getpwuid(id);
     strcpy(meno, pws->pw_name);
@@ -326,7 +396,8 @@ char *getHostname()
 {
     static char hostname[NAME_SIZE]; // Assuming maximum hostname length is 255 characters
     // Get the hostname
-    if (gethostname(hostname, sizeof(hostname)) != 0) {
+    if (gethostname(hostname, sizeof(hostname)) != 0)
+    {
         perror("gethostname failed");
         return NULL;
     }
@@ -366,7 +437,7 @@ void client()
 {
     printf("You are client\n");
 
-    int sock, connection_status;                                     // Definitions of variables
+    int sock, connection_status, log_file;                                     // Definitions of variables
     struct sockaddr_in connection_client;
     char output[BUFFER_SIZE], input[BUFFER_SIZE], name[NAME_SIZE];
 
@@ -409,6 +480,16 @@ void client()
         pthread_exit(NULL);     // Shut down of client
     }
 
+    if(file_flag)
+    {
+        log_file = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if((log_file) < 0)
+        {
+            file_flag = 0;
+            perror("Log Error");
+        }
+    }
+
     // Handle client communication
     while(1)
     {
@@ -418,20 +499,31 @@ void client()
         printf("%s %s@%s# ",getTime(), name, getHostname());
 
         fgets(input, BUFFER_SIZE, stdin);        // Read input from stdin
+
+        if (file_flag)
+        {
+            write(log_file, input, strlen(input));
+        }
+
         input[strlen(input) - 1] = '\0';
 
-        write(sock, input, strlen(input));      // Send input to the server
-        read(sock, output, sizeof(output));    // Receive output from the server
+        if(strcmp(input,"") != 0)
+        {
+            write(sock, input, strlen(input));      // Send input to the server
+            read(sock, output, sizeof(output));    // Receive output from the server
+        }
 
         if (strcmp(output, "halt") == 0)          // If server will quit
         {
             printf("Autodisconnection - Server disconnected\n");
+            close(file_flag);
             close(sock);
             break;
         }
 
         if (strcmp(input, "quit") == 0)           // If client will quit
         {
+            close(file_flag);
             close(sock);
             break;
         }
@@ -443,8 +535,19 @@ void client()
 //Function is defined as server's thread whitch enable server stdin input
 void *handle_server_input(void *arg)
 {
+    int log_file;
     Connection *args = (Connection *)arg;            // Definitions of variables
     char output[BUFFER_SIZE], input[BUFFER_SIZE];
+
+    if(file_flag)
+    {
+        log_file = open(file, O_WRONLY | O_CREAT | O_TRUNC, 0666);
+        if((log_file) < 0)
+        {
+            file_flag = 0;
+            perror("Log Error");
+        }
+    }
 
     while (1)
     {
@@ -453,6 +556,12 @@ void *handle_server_input(void *arg)
 
         printf("%s %s@%s# ",getTime(), getServername(), getHostname());
         fgets(input, BUFFER_SIZE, stdin);       // Read input from stdin
+
+        if (file_flag)
+        {
+            write(log_file, input, strlen(input));
+        }
+
         input[strlen(input) - 1] = '\0';
 
         if (strcmp(input, "halt") == 0)                    //if input == halt breaks
@@ -461,13 +570,16 @@ void *handle_server_input(void *arg)
             for(int i = 0; i < MAX_LISTENERS; i++)
             {
                 if (clients[i] != 0)
+                {
                     write(clients[i], input, strlen(input));
+                }
+                close(file_flag);
             }
             exit(EXIT_SUCCESS);
         }
         else                                             //else execute command
         {
-            execute(input, args->std_in, args->std_out, SERVER, NULL);     //copy bash output to output buffer
+            execute(input, args->std_in, args->std_out, SERVER, (void*)args);     //copy bash output to output buffer
         }
     }
 }
@@ -509,7 +621,7 @@ void *handle_client(void *arg)
         }
         else
         {
-            execute(input, args->std_in, args->std_out,  CLIENT, &(args->socket));                     // Execute input and copy it to output
+            execute(input, args->std_in, args->std_out,  CLIENT, (void*)args);                     // Execute input and copy it to output
         }
     }
 
@@ -569,7 +681,7 @@ void server()
 
     printf("Server listening on port %d...\n", port);
 
-    Connection arguments_server = {server_sock, std_in, std_out, server_addr, server_connection};
+    Connection arguments_server = {SERVER,server_sock, std_in, std_out, server_addr, server_connection};
     if (pthread_create(&input_thread_id, NULL, handle_server_input, &arguments_server) != 0)     //Create thread to handle input on server
     {
         perror("Server input thread creation failed");
@@ -588,8 +700,8 @@ void server()
             continue;
         }
 
-        Connection arguments = {client_sock, std_in, std_out, client_addr, server_connection};                            // Pushing information to threads
-        if (pthread_create(&client_thread_id, NULL, handle_client, &arguments) != 0)      // Create thread to handle client communication
+        Connection arguments = {CLIENT,client_sock, std_in, std_out, client_addr, server_connection};        // Pushing information to threads
+        if (pthread_create(&client_thread_id, NULL, handle_client, &arguments) != 0)                // Create thread to handle client communication
         {
             perror("Thread creation failed");
             close(client_sock);
@@ -604,13 +716,15 @@ int main(int argc, char **argv)
 {
     int opt;
     strcpy(pathname, "./sck");
+    strcpy(ip, "127.0.0.1");
 
-    while ((opt = getopt(argc, argv, ":hscp:p:")) != -1)
+    while ((opt = getopt(argc, argv, ":hsci:l:p:")) != -1)
     {
         switch(opt) {
             case 'h':
                 help();
                 break;
+
             case 's':
                 if(mode != CLIENT)
                 {
@@ -633,6 +747,15 @@ int main(int argc, char **argv)
                     printf("Program doesn't support both server and client at same time\n");
                     return EXIT_FAILURE;
                 }
+            case 'i':
+                strcpy(ip, optarg);
+                break;
+
+            case 'l':
+                strcpy(file, optarg);
+                file_flag = 1;
+                break;
+
             case 'p':
                 char *endptr;
                 port = (int) strtol(optarg, &endptr, 10);
