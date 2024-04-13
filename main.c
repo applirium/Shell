@@ -4,10 +4,12 @@
 #include <unistd.h>
 #include <pthread.h>
 #include <fcntl.h>
-
+#include <time.h>
 #include <arpa/inet.h>
 #include <sys/socket.h>
+#include <sys/wait.h>
 #include <netinet/in.h>
+#include <pwd.h>
 
 #define MAX_LISTENERS 5
 #define SERVER 0
@@ -15,6 +17,17 @@
 #define BUFFER_SIZE 65536
 #define NAME_SIZE 20
 
+// Main Program ALMOST         6
+// 3. TODO stat
+// 7. Inline assembler       + 3
+// 9. Client                 + 3
+// 10. Special characters '' + 2
+// 11. TODO IP -i
+// 24. TODO logs -l
+// 28. TODO Makefile
+// 30. English Documentation + 1
+// ---------------------------
+//                    6 + 9 = 15
 char pathname[50];
 int mode = -1;
 int port = 12345;
@@ -34,9 +47,7 @@ typedef struct Node {
 
 int builtin_help(char **args);
 
-char *builtin_str[] = {
-        "help"
-};
+char *builtin_str[] ={"help"};
 
 void help()
 {
@@ -57,9 +68,6 @@ void help()
     for (int i = 0; i < sizeof(builtin_str) / sizeof(char *); i++) {
         printf("    %3s\n", builtin_str[i]);
     }
-
-    printf("\n"
-           "Use man for more information about bash commands\n");
 }
 
 int (*builtin_func[]) (char **) = {
@@ -109,7 +117,6 @@ void insertAtEnd(struct Node** headRef, char** data) {
     while (last->next != NULL) {
         last = last->next;
     }
-
     last->next = newNode;
 }
 
@@ -132,8 +139,7 @@ Node* input_parsing(char* input)
 {
     Node* linked_list = NULL;
     char* command_pieces[10] = {NULL}; // Array to hold command pieces
-    int index = 0;
-    int piece_index = 0;
+    int index = 0, piece_index = 0, special = 0;
 
     for (int i = 0; i <= strlen(input); i++)
     {
@@ -147,14 +153,21 @@ Node* input_parsing(char* input)
             }
         }
 
-        else if (input[i] == '#' || input[i] == '>' || input[i] == '<' || input[i] == ';' || input[i] == '\\' || input[i] == '|' || input[i] == '\0')
+        else if ((input[i] == '#' || input[i] == '>' || input[i] == '<' || input[i] == ';' || input[i] == '|' || input[i] == '\0') && special == 0)
         {
             if (piece_index != 0 || index != 0)
             {
-                command_pieces[piece_index][index] = '\0';
+                if(command_pieces[piece_index] != NULL)
+                {
+                    if(command_pieces[piece_index][index] != '\0')
+                    {
+                        command_pieces[piece_index][index++] = '\0';
+                    }
+                }
 
                 insertAtEnd(&linked_list, command_pieces); // Insert the command pieces into the linked list
                 piece_index = 0; // Reset piece_index
+                index = 0;
 
                 for (int j = 0; j < 10; j++)
                 {
@@ -180,7 +193,28 @@ Node* input_parsing(char* input)
             if (command_pieces[piece_index] == NULL)
                 command_pieces[piece_index] = (char *) malloc((strlen(input) - i + 1));
 
-            command_pieces[piece_index][index++] = input[i];
+
+            if(input[i] == '\'')
+            {
+                special = !special;
+                continue;
+            }
+
+            if(input[i] == '\"' && special != 1)
+                continue;
+
+            if(input[i] == '\\' && special != 1)
+                i++;
+
+            if(i == strlen(input))
+            {
+                command_pieces[piece_index][index++] = '\0';
+                insertAtEnd(&linked_list, command_pieces);
+            }
+            else
+            {
+                command_pieces[piece_index][index++] = input[i];
+            }
         }
     }
 
@@ -189,62 +223,69 @@ Node* input_parsing(char* input)
 
 void execute(char* input, int std_in, int std_out, int i, const int* socket)
 {
-    int server_stdout, builtin;
+    int server_stdout, builtin, skip;
     char output[BUFFER_SIZE];
     ssize_t bytes_read;
 
     // setting output to temporary file
     server_stdout = open("server_output.tmp", O_WRONLY | O_CREAT | O_TRUNC, 0666);
-    write(server_stdout, "bash: ", strlen("bash: "));
 
     Node* parsed_linked_input = input_parsing(input);
     Node* current = parsed_linked_input;
 
     while (current != NULL) {
-        int index = 0;
-        while (current->command[index] != NULL)
+        skip = 0;
+
+        for(int j = 0; j < sizeof(builtin_str) / sizeof(char *); j++)
         {
-            for(int j = 0; j < sizeof(builtin_str) / sizeof(char *); j++)
+            builtin = 0;
+            if (strcmp(current->command[0], builtin_str[j]) == 0)
             {
-                builtin = 0;
-                if (strcmp(current->command[index], builtin_str[j]) == 0)
+                dup2(server_stdout, STDOUT_FILENO);
+                builtin_func[j](current->command);
+                builtin = 1;
+                break;
+            }
+        }
+        if (builtin)
+            break;
+
+        if (strcmp(current->command[0], "#") == 0)
+            break;
+
+        if (strcmp(current->command[0], ";") == 0 || strcmp(current->command[0], "<") == 0 || strcmp(current->command[0], ">") == 0)
+            skip = 1;
+
+        if(!skip)
+        {
+            if (fork() == 0)
+            {
+                dup2(server_stdout, STDOUT_FILENO);
+                dup2(server_stdout, STDERR_FILENO);
+
+                if (execvp(current->command[0], current->command) == -1)
                 {
-                    int original_stdout = dup(server_stdout);
-
-                    dup2(server_stdout, 1);
-                    builtin_func[j](current->command);
-                    dup2(original_stdout, 1);
-                    builtin = 1;
-
-                    break;
+                    perror("Exec Error");            // if something bad happens call error
+                    _exit(1);
                 }
             }
-
-            if (builtin)
-                break;
-
-
-            write(server_stdout, current->command[index], strlen(current->command[index]));
-            index++;
+            wait(NULL);                 // parent process, child will not get here!!!, wait for child to complete
         }
         current = current->next;
     }
 
-
-    // close open files and send response with output to client
-
     deleteList(&parsed_linked_input);
     close(server_stdout);
+
     dup2(std_in, STDIN_FILENO);
     dup2(std_out, STDOUT_FILENO);
-
 
     server_stdout = open("server_output.tmp", O_RDONLY, 0666);
     bytes_read = read(server_stdout, output, sizeof(output) - 1);
     output[bytes_read] = '\0';
 
     if (i == SERVER)
-        printf("%s\n", output);
+        printf("%s", output);
 
     else
         write(*socket, output, bytes_read);
@@ -254,20 +295,35 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
 }
 
 // Function to get actual time and return it as a string
-char *getTime() {
-    static char time_str[9]; // HH:MM\0
-    int hours, minutes;
-    time_t now;
-    time(&now);
-    struct tm *local = localtime(&now);
-    hours = local->tm_hour;
-    minutes = local->tm_min;
-    snprintf(time_str, sizeof(time_str), "%02d:%02d", hours, minutes);
+char *getTime()
+{
+    time_t mytime = time(NULL);
+    char * time_str = ctime(&mytime);
+    time_str[strlen(time_str)-1] = '\0';
+
     return time_str;
 }
 
+char* getServername()
+{
+    struct passwd *pws;
+    int id;
+    static char meno[100] = "";
+
+    asm volatile (
+            "mov $102, %%rax\n"  // Set rax register to 102 (syscall number for getuid)
+            "syscall\n"          // Trigger the syscall
+            : "=a" (id)          // Output: id
+            );
+
+    pws = getpwuid(id);
+    strcpy(meno, pws->pw_name);
+    return meno;
+}
+
 // Function to get hostname and return it as a string
-char *getHostname() {
+char *getHostname()
+{
     static char hostname[NAME_SIZE]; // Assuming maximum hostname length is 255 characters
     // Get the hostname
     if (gethostname(hostname, sizeof(hostname)) != 0) {
@@ -306,7 +362,8 @@ int disconnection(int** client_connections, int socket)
 }
 
 //Function to handle client
-void client() {
+void client()
+{
     printf("You are client\n");
 
     int sock, connection_status;                                     // Definitions of variables
@@ -379,7 +436,7 @@ void client() {
             break;
         }
 
-        printf("%s\n", output);        // Print the received output
+        printf("%s", output);        // Print the received output
     }
 }
 
@@ -394,7 +451,7 @@ void *handle_server_input(void *arg)
         memset(input, 0, sizeof(input));            // Reset of buffers
         memset(output, 0, sizeof(output));
 
-        printf("%s %s@%s# ",getTime(), getHostname(), getHostname());
+        printf("%s %s@%s# ",getTime(), getServername(), getHostname());
         fgets(input, BUFFER_SIZE, stdin);       // Read input from stdin
         input[strlen(input) - 1] = '\0';
 
@@ -461,7 +518,8 @@ void *handle_client(void *arg)
 }
 
 //Function to handle server
-void server() {
+void server()
+{
     printf("You are server\n");
 
     int std_in, std_out, server_sock, client_sock, opt = 1;                               // Definitions of variables
@@ -542,7 +600,8 @@ void server() {
     }
 }
 
-int main(int argc, char **argv) {
+int main(int argc, char **argv)
+{
     int opt;
     strcpy(pathname, "./sck");
 
