@@ -17,7 +17,7 @@
 #define BUFFER_SIZE 65536
 #define NAME_SIZE 20
 
-// Main Program                6
+// Main Program ALMOST         6
 // 3. TODO stat
 // 7. Inline assembler       + 3
 // 9. Client                 + 3
@@ -223,7 +223,7 @@ Node* input_parsing(char* input)
 
 void execute(char* input, int std_in, int std_out, int i, const int* socket)
 {
-    int fd[2], server_stdout, builtin, skip;
+    int server_stdout, builtin, skip;
     char output[BUFFER_SIZE];
     ssize_t bytes_read;
 
@@ -233,8 +233,7 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
     Node* parsed_linked_input = input_parsing(input);
     Node* current = parsed_linked_input;
 
-    while (current != NULL)
-    {
+    while (current != NULL) {
         skip = 0;
 
         for(int j = 0; j < sizeof(builtin_str) / sizeof(char *); j++)
@@ -251,30 +250,18 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
         if (builtin)
             break;
 
-        if (pipe(fd) < 0)
-            perror("Pipe error");
-
         if (strcmp(current->command[0], "#") == 0)
             break;
 
-        if (strcmp(current->command[0], ";") == 0 || strcmp(current->command[0], "|") == 0)
+        if (strcmp(current->command[0], ";") == 0 || strcmp(current->command[0], "<") == 0 || strcmp(current->command[0], ">") == 0)
             skip = 1;
 
         if(!skip)
         {
             if (fork() == 0)
             {
-                if (current->next != NULL && strcmp(current->next->command[0], "|") == 0)
-                {
-                    close(fd[0]);
-                    dup2(fd[1], STDOUT_FILENO);
-                    dup2(fd[1], STDERR_FILENO);
-                }
-                else
-                {
-                    dup2(server_stdout, STDOUT_FILENO);
-                    dup2(server_stdout, STDERR_FILENO);
-                }
+                dup2(server_stdout, STDOUT_FILENO);
+                dup2(server_stdout, STDERR_FILENO);
 
                 if (execvp(current->command[0], current->command) == -1)
                 {
@@ -283,13 +270,6 @@ void execute(char* input, int std_in, int std_out, int i, const int* socket)
                 }
             }
             wait(NULL);                 // parent process, child will not get here!!!, wait for child to complete
-
-            close(fd[1]);
-            if (current->next != NULL && strcmp(current->next->command[0], "|") == 0)
-            {
-                dup2(fd[0], STDIN_FILENO);
-            }
-            close(fd[0]);
         }
         current = current->next;
     }
