@@ -1,3 +1,5 @@
+//header file for help function, this will be linked to main.c as a .ar file
+
 #ifndef SHELL_HELP_H
 #define SHELL_HELP_H
 

@@ -2,6 +2,7 @@
 
 char *builtin_str[] ={"help","stat"};
 
+//help function to print information about program
 void help() {
     printf("Author - Lukáš Štefančík\n"
            "SPAASM Zadanie 2\n"
@@ -11,7 +12,7 @@ void help() {
            "-p <port number> to set port\n"
            "-i <ip> to set IP adress\n"
            ";l <file> to set history file"
-           "\n"
+           "\n\n"
            "Connection modes\n"
            "    0 - SERVER\n"
            "    1 - CLIENT\n"
